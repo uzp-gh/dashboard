@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="pl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trading Dashboard</title>
-<link rel="icon" type="image/x-icon" href="favicon.png">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Dashboard</title>
+    <link rel="icon" type="image/x-icon" href="favicon.png">
 <style>
   :root{
     --bg:#0a0a0a;
@@ -85,6 +85,19 @@
   .header-title p{margin:0; font-size:0.82rem; color:var(--text-muted);}
   .header-right{display:flex; align-items:center; gap:8px; flex-wrap:wrap; position:relative;}
   .last-updated{font-size:0.76rem; color:var(--text-faint); white-space:nowrap; margin-right:2px;}
+  @media (max-width:600px){
+    /* Ikony i tekst "Zaktualizowano..." wyrównane do prawej krawędzi */
+    .header-right{
+      width:100%;
+      justify-content:flex-end;
+    }
+    .last-updated{
+      order:99;
+      width:100%;
+      margin:6px 0 0;
+      text-align:right;
+    }
+  }
   .icon-btn{
     position:relative;
     width:36px; height:36px;
@@ -119,8 +132,12 @@
   .icon-badge.count-accent{background:var(--accent); color:#052015;}
 
   /* ---------- Search ---------- */
-  .search-wrap{display:flex; align-items:center; gap:6px;}
+  .search-wrap{display:flex; align-items:center; gap:6px; position:relative;}
   .search-input{
+    position:absolute;
+    top:50%;
+    right:0;
+    transform:translateY(-50%);
     width:0; opacity:0; padding:0; border:none;
     background:var(--panel-bg);
     color:var(--text);
@@ -128,9 +145,11 @@
     font-size:0.85rem;
     transition:width .18s ease, opacity .18s ease, padding .18s ease;
     height:36px;
+    z-index:40;
+    box-shadow:0 8px 24px rgba(0,0,0,0.45);
   }
   .search-input.open{
-    width:180px; opacity:1; padding:0 12px;
+    width:220px; opacity:1; padding:0 12px;
     border:1px solid var(--border);
   }
   .search-input:focus{outline:none; border-color:var(--border-strong);}
@@ -171,6 +190,33 @@
      przesłaniałaby domyślne ukrycie z [hidden]. */
   .bell-popup.open, .settings-popup.open{
     display:flex;
+  }
+  @media (max-width:600px){
+    /* Na smartfonie popup wyświetla się zawsze na środku ekranu, a nie
+       przypięty do przycisku, który go otworzył (inaczej wychodził poza ekran) */
+    .bell-popup, .settings-popup{
+      position:fixed;
+      top:50%;
+      left:50%;
+      right:auto;
+      transform:translate(-50%, -50%);
+      width:92vw;
+      max-width:400px;
+      max-height:80vh;
+    }
+  }
+
+  /* Ciemna warstwa pod popupem (tylko mobile) - klik w nią zamyka popup
+     (obsłużone przez istniejący globalny listener zamykający po kliknięciu poza popupem) */
+  .popup-overlay{
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.5);
+    z-index:29;
+  }
+  @media (max-width:600px){
+    .popup-overlay.active{ display:block; }
   }
   .bell-popup-header{
     display:flex;
@@ -351,7 +397,13 @@
   .grid.cols-2{grid-template-columns:repeat(2, 1fr);}
   @media (max-width:1200px){ .grid{grid-template-columns:repeat(3,1fr);} }
   @media (max-width:900px){ .grid{grid-template-columns:repeat(2,1fr);} }
-  @media (max-width:600px){ .grid{grid-template-columns:1fr;} .page{padding:20px 16px 40px;} }
+  @media (max-width:600px){
+    .page{padding:20px 16px 40px;}
+    /* Na smartfonie układ jest zawsze jednokolumnowy, niezależnie od zapisanego
+       ustawienia liczby kolumn (stąd wyższa specyficzność niż .grid.cols-2/.cols-3) */
+    .grid, .grid.cols-2, .grid.cols-3{grid-template-columns:1fr;}
+    #gridViewBtn{display:none;}
+  }
 
   .card{
     background:var(--card-bg);
@@ -655,6 +707,9 @@
 <button class="sheet-icon" id="sheetIcon" hidden title="Kliknij: otwórz arkusz w nowej karcie • Ctrl+klik: powiększ">
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#052015" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
 </button>
+
+<!-- Ciemna warstwa pod popupami Powiadomienia/Ustawienia (widoczna tylko na mobile) -->
+<div class="popup-overlay" id="popupOverlay"></div>
 
 <script>
 /* =========================================================================
@@ -1392,6 +1447,11 @@
     searchTerm = e.target.value.trim().toLowerCase();
     renderCurrentView();
   });
+  // Pole znika, gdy traci focus na rzecz innego elementu (filtr, jeśli aktywny, zostaje zastosowany)
+  searchInput.addEventListener('blur', () => {
+    searchInput.classList.remove('open');
+    searchBtn.classList.toggle('active', searchTerm !== '');
+  });
 
 /* ---------- Widok siatki (liczba kolumn) ---------- */
   const GRID_STATES = [4, 3, 2];
@@ -1404,11 +1464,15 @@
   });
 
 /* ---------- Dzwonek: popup ---------- */
+  function setOverlay(active){
+    document.getElementById('popupOverlay').classList.toggle('active', active);
+  }
   function closeAllPopups(){
     document.getElementById('bellPopup').classList.remove('open');
     document.getElementById('settingsPopup').classList.remove('open');
     bellPopupOpen = false;
     settingsPopupOpen = false;
+    setOverlay(false);
   }
   document.getElementById('bellBtn').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1419,6 +1483,7 @@
       popup.classList.add('open');
       bellPopupOpen = true;
       renderBellList();
+      setOverlay(true);
     }
   });
   document.getElementById('bellClearBtn').addEventListener('click', clearAllAlerts);
@@ -1433,6 +1498,7 @@
     if(willOpen){
       popup.classList.add('open');
       settingsPopupOpen = true;
+      setOverlay(true);
     }
   });
   document.querySelectorAll('.settings-tab').forEach(tab => {
@@ -1505,6 +1571,7 @@
   document.addEventListener('click', (e) => {
     if(!e.target.closest('.bell-wrap')) { document.getElementById('bellPopup').classList.remove('open'); bellPopupOpen = false; }
     if(!e.target.closest('.settings-wrap')) { document.getElementById('settingsPopup').classList.remove('open'); settingsPopupOpen = false; }
+    if(!bellPopupOpen && !settingsPopupOpen) setOverlay(false);
   });
   document.addEventListener('keydown', (e) => { if(e.key === 'Escape') closeAllPopups(); });
 
