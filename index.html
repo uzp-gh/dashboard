@@ -5,6 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Trading Dashboard</title>
 <link rel="icon" type="image/x-icon" href="favicon.png">
+<!-- Widget "Single Ticker" osadza swoją treść (m.in. link brandingowy TradingView) w ZAMKNIĘTYM
+     Shadow DOM (mode:"closed"), do którego strona nie ma normalnie żadnego dostępu - ani przez
+     CSS, ani przez JS (element.shadowRoot zwraca null). Poniższy skrypt musi wykonać się PRZED
+     skryptem widgetu (kolejność w dokumencie to gwarantuje - moduły zawsze czekają na
+     przeanalizowanie strony, zwykłe skrypty klasyczne wykonują się od razu w miejscu wystąpienia).
+     Nadpisujemy Element.prototype.attachShadow tak, aby KAŻDE wywołanie tworzyło Shadow Root
+     w trybie "open" - dzięki temu element.shadowRoot faktycznie zwraca węzeł i możemy w nim
+     ukryć/usunąć branding (patrz funkcja hideBottomLinks niżej). -->
+<script>
+(function(){
+  const originalAttachShadow = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function(init){
+    return originalAttachShadow.call(this, Object.assign({}, init, { mode: 'open' }));
+  };
+})();
+</script>
+<!-- Web Component widgetu TradingView "Single Ticker" - ładowany raz, globalnie -->
+<script type="module" src="https://widgets.tradingview-widget.com/w/pl/tv-single-ticker.js"></script>
 <style>
   :root{
     --bg:#0a0a0a;
@@ -155,7 +173,7 @@
   .search-input:focus{outline:none; border-color:var(--border-strong);}
 
   /* ---------- Bell popup ---------- */
-  .bell-wrap, .settings-wrap{position:relative;}
+  .bell-wrap, .settings-wrap, .news-wrap{position:relative;}
   .bell-count{
     position:absolute; top:-4px; right:-4px;
     min-width:16px; height:16px;
@@ -194,7 +212,7 @@
   @media (max-width:600px){
     /* Na smartfonie popup wyświetla się zawsze na środku ekranu, a nie
        przypięty do przycisku, który go otworzył (inaczej wychodził poza ekran) */
-    .bell-popup, .settings-popup{
+    .bell-popup, .settings-popup, .news-popup{
       position:fixed;
       top:50%;
       left:50%;
@@ -204,6 +222,35 @@
       max-width:400px;
       max-height:80vh;
     }
+  }
+
+  /* ---------- News / Kalendarz popup ---------- */
+  /* Na desktopie: jeśli się mieści, popup ma szerokość paska nawigacji kategorii (tabbar / .page),
+     a nie szerokość przypisaną do ikony jak pozostałe popupy. Pozycja "top" jest ustawiana z JS
+     (positionNewsPopup), tak aby zawsze zaczynał się tuż pod nagłówkiem, niezależnie od jego wysokości. */
+  .news-popup{
+    position:fixed;
+    left:50%;
+    transform:translateX(-50%);
+    width:min(calc(100vw - 64px), 1336px);
+    max-width:min(calc(100vw - 64px), 1336px);
+    height:min(70vh, 620px);
+    display:none;
+    flex-direction:column;
+    background:var(--panel-bg);
+    border:1px solid var(--border-strong);
+    border-radius:var(--radius-md);
+    box-shadow:0 12px 32px rgba(0,0,0,0.5);
+    z-index:30;
+    overflow:hidden;
+  }
+  .news-popup.open{display:flex;}
+  .news-panel{flex:1; padding:0; overflow:hidden; display:flex;}
+  .news-panel[hidden]{display:none;}
+  .news-panel .tradingview-widget-container,
+  .news-panel .tradingview-widget-container__widget{
+    width:100% !important;
+    height:100% !important;
   }
 
   /* Ciemna warstwa pod popupem (tylko mobile) - klik w nią zamyka popup
@@ -277,13 +324,13 @@
 
   /* ---------- Settings popup ---------- */
   .settings-tabs{display:flex; border-bottom:1px solid var(--border); flex-shrink:0;}
-  .settings-tab{
+  .settings-tab, .news-tab{
     flex:1; padding:11px 8px; text-align:center;
     background:transparent; border:none; color:var(--text-muted);
     font-size:0.82rem; font-weight:600; cursor:pointer;
     border-bottom:2px solid transparent;
   }
-  .settings-tab.active{color:var(--text); border-bottom-color:var(--accent);}
+  .settings-tab.active, .news-tab.active{color:var(--text); border-bottom-color:var(--accent);}
   .settings-panel{padding:14px; overflow-y:auto;}
   .settings-check{
     display:flex; align-items:center; gap:9px;
@@ -409,21 +456,29 @@
     background:var(--card-bg);
     border:1px solid var(--border);
     border-radius:var(--radius-lg);
-    padding:16px;
+    /* overflow:hidden przycina wykres/ticker (bez własnego zaokrąglenia) do zaokrąglonych rogów karty */
+    overflow:hidden;
     display:flex;
     flex-direction:column;
-    gap:14px;
     transition:border-color .15s ease;
   }
   .card:hover{border-color:var(--border-strong);}
+
+  /* Widget tv-single-ticker (zastępuje dawną Nazwę/Zmianę czytaną z arkusza) - od krawędzi do krawędzi karty */
+  .ticker-box{
+    width:100%;
+    min-height:44px;
+    background:var(--chart-bg);
+    border-bottom:1px solid var(--border);
+    overflow:hidden;
+  }
+  .ticker-box tv-single-ticker{display:block; width:100%;}
 
   .chart-box{
     position:relative;
     width:100%;
     aspect-ratio:1/0.92;
     background:var(--chart-bg);
-    border:1px solid var(--border);
-    border-radius:var(--radius-md);
     overflow:hidden;
   }
   .chart-box .tradingview-widget-container,
@@ -439,37 +494,24 @@
     text-align:center;
     padding:12px;
   }
-  /* Zawsze ukrywamy wiersz z copyrightem/branding dodawany przez skrypt TradingView */
+  /* Zawsze ukrywamy wiersz z copyrightem/branding dodawany przez skrypt TradingView (widgety typu iframe) */
   .tradingview-widget-copyright{
     display:none !important;
   }
+  /* Web Component tv-single-ticker dokleja obok siebie znacznik z linkiem/brandingiem
+     (klasa "bottom-link"). Tekst wewnątrz różni się dla każdego tickera, więc celujemy
+     w samą klasę, a nie w treść — działa niezależnie od tickera. */
+  .bottom-link{
+    display:none !important;
+  }
 
-  .card-header{
+  /* Reszta danych z arkusza (statystyki, opis) zachowuje własny padding karty */
+  .card-body{
+    padding:16px;
     display:flex;
-    align-items:baseline;
-    justify-content:space-between;
-    gap:10px;
+    flex-direction:column;
+    gap:14px;
   }
-  .card-name{
-    font-size:1.12rem;
-    font-weight:600;
-    letter-spacing:-0.01em;
-    margin:0;
-    min-width:0;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    white-space:nowrap;
-  }
-  .card-change{
-    flex-shrink:0;
-    font-weight:600;
-    font-size:0.95rem;
-    text-align:right;
-    white-space:nowrap;
-  }
-  .card-change.positive{color:var(--accent);}
-  .card-change.negative{color:var(--danger);}
-  .card-change.neutral{color:var(--text-muted);}
 
   .stats{
     display:grid;
@@ -477,8 +519,11 @@
     row-gap:8px;
     column-gap:10px;
     font-size:0.86rem;
-    border-top:1px solid var(--border);
-    padding-top:12px;
+  }
+  /* Separator przeniesiony niżej: teraz oddziela dane (stats) od opisu, a nie nazwę od danych */
+  .stats.with-separator{
+    border-bottom:1px solid var(--border);
+    padding-bottom:14px;
   }
   .stat{display:flex; align-items:center; justify-content:space-between; gap:6px;}
   .stat .k{color:var(--text-muted);}
@@ -610,6 +655,28 @@
         <span class="icon-badge" id="gridBadge">4</span>
       </button>
 
+      <div class="news-wrap">
+        <button class="icon-btn" id="newsBtn" title="News i Kalendarz ekonomiczny">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </button>
+        <div class="news-popup" id="newsPopup">
+          <div class="settings-tabs">
+            <button class="news-tab active" data-newstab="news">News</button>
+            <button class="news-tab" data-newstab="calendar">Kalendarz</button>
+          </div>
+          <div class="news-panel" data-newspanel="news">
+            <div class="tradingview-widget-container" id="newsWidgetContainer">
+              <div class="tradingview-widget-container__widget"></div>
+            </div>
+          </div>
+          <div class="news-panel" data-newspanel="calendar" hidden>
+            <div class="tradingview-widget-container" id="calendarWidgetContainer">
+              <div class="tradingview-widget-container__widget"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="bell-wrap">
         <button class="icon-btn" id="bellBtn" title="Powiadomienia">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -641,6 +708,7 @@
           </div>
           <div class="settings-panel" data-panel="indicators">
             <label class="settings-check"><input type="checkbox" value="STD;SMA"> Simple Moving Average</label>
+            <label class="settings-check"><input type="checkbox" value="STD;MA%Ribbon"> MA Ribbon</label>
             <label class="settings-check"><input type="checkbox" value="STD;MACD"> Moving Average Convergence/Divergence</label>
             <label class="settings-check"><input type="checkbox" value="STD;Supertrend"> Supertrend</label>
             <label class="settings-check"><input type="checkbox" value="STD;Bollinger_Bands"> Bollinger Band</label>
@@ -753,13 +821,116 @@
       watchlist: [],
       withdateranges: false,
       compareSymbols: [],
-      studies: settings.studies && settings.studies.length ? settings.studies.slice() : ["STD;SMA"],
+      studies: settings.studies && settings.studies.length ? settings.studies.slice() : ["STD;SMA", "STD;Supertrend"],
       width: "100%",
       height: "100%"
     };
   }
 
-/* ============================== CIASTECZKA ================================ */
+/* ============================== TICKER: ŻYWA CENA Z WIDGETU ================
+   Widget tv-single-ticker (Web Component TradingView) renderuje cenę wewnątrz
+   elementu <tv-price-change-highlight>WARTOŚĆ</tv-price-change-highlight>,
+   który może być zagnieżdżony w Shadow DOM potomnych komponentów. queryDeep()
+   przeszukuje zarówno zwykły DOM, jak i otwarte (open) Shadow Roots.
+   ========================================================================= */
+  function queryDeep(root, selector, results){
+    results = results || [];
+    if(!root || !root.querySelectorAll) return results;
+    root.querySelectorAll(selector).forEach(el => results.push(el));
+    root.querySelectorAll('*').forEach(el => {
+      if(el.shadowRoot) queryDeep(el.shadowRoot, selector, results);
+    });
+    return results;
+  }
+
+  // Dzięki wymuszeniu trybu "open" (patrz <head>) możemy teraz faktycznie dotrzeć do
+  // zagnieżdżonego (podwójny Shadow DOM: tv-single-ticker -> tv-attribution-boundary)
+  // znacznika z linkiem/brandingiem TradingView i go ukryć - niezależnie od tickera.
+  function hideBottomLinks(rootEl){
+    const found = queryDeep(rootEl, '.bottom-link');
+    found.forEach(el => {
+      el.style.setProperty('display', 'none', 'important');
+      // Dodatkowo wstrzykujemy regułę CSS bezpośrednio do danego Shadow Roota (raz),
+      // żeby ukrycie przetrwało ewentualne ponowne renderowanie/aktualizacje widgetu.
+      const root = el.getRootNode();
+      if(root && root instanceof ShadowRoot && !root.__brandingHiddenStyle){
+        const style = document.createElement('style');
+        style.textContent = '.bottom-link{ display:none !important; }';
+        root.prepend(style);
+        root.__brandingHiddenStyle = true;
+      }
+    });
+    return found.length > 0;
+  }
+
+  function pollHideBranding(rootEl, { intervalMs = 400, timeoutMs = 9000 } = {}){
+    const start = Date.now();
+    (function tick(){
+      hideBottomLinks(rootEl);
+      if(Date.now() - start >= timeoutMs) return;
+      setTimeout(tick, intervalMs);
+    })();
+  }
+
+  function extractPriceFromTicker(rootEl){
+    const found = queryDeep(rootEl, 'tv-price-change-highlight');
+    if(!found.length) return NaN;
+    return parseNum(found[0].textContent);
+  }
+
+  function pollForPrice(rootEl, callback, { intervalMs = 400, timeoutMs = 9000 } = {}){
+    const start = Date.now();
+    (function tick(){
+      const val = extractPriceFromTicker(rootEl);
+      if(!isNaN(val)){ callback(val); return; }
+      if(Date.now() - start >= timeoutMs){ callback(NaN); return; }
+      setTimeout(tick, intervalMs);
+    })();
+  }
+
+  // Montuje niewidoczny (poza ekranem) widget tickera, aby pobrać samą cenę - używane
+  // przy skanowaniu alertów dla arkuszy, które nie są aktualnie wyświetlane na karcie.
+  function fetchLivePriceForTicker(ticker){
+    return new Promise(resolve => {
+      if(!ticker){ resolve(NaN); return; }
+      const holder = document.createElement('div');
+      holder.style.cssText = 'position:fixed; left:-9999px; top:-9999px; width:220px; height:60px; pointer-events:none;';
+      const el = document.createElement('tv-single-ticker');
+      el.setAttribute('symbol', ticker);
+      el.setAttribute('theme', 'dark');
+      holder.appendChild(el);
+      document.body.appendChild(holder);
+      pollForPrice(el, (val) => {
+        holder.remove();
+        resolve(val);
+      });
+    });
+  }
+
+  // Odczytuje cenę z widgetu tickera widocznego na karcie, aktualizuje podświetlenia
+  // (BOS/CHoCH/Entry/TP) oraz alerty, i loguje wynik w konsoli (kontrola/debug).
+  function initTickerPriceWatch(box, item){
+    if(!box || !box.dataset.symbol) return;
+    pollForPrice(box, (val) => {
+      if(isNaN(val)) return; // nie udało się pobrać ceny w rozsądnym czasie - zostawiamy stan bez zmian
+      item.cena = String(val);
+      console.log('[Ticker]', item.ticker, '→ cena:', val);
+      const h = computeHighlights(item);
+      const cardEl = box.closest('.card');
+      if(cardEl){
+        ['bos', 'choch', 'entry', 'tp'].forEach(key => {
+          const el = cardEl.querySelector('.stat .v[data-key="' + key + '"]');
+          if(el) el.classList.toggle('badge', h[key]);
+        });
+      }
+      recordAlertsForItem(activeSheet, item);
+      persistAlerts();
+      renderBellBadge();
+      if(bellPopupOpen) renderBellList();
+    });
+  }
+
+
   function setCookie(name, value, days){
     const maxAge = days * 24 * 60 * 60;
     document.cookie = name + '=' + encodeURIComponent(value) + ';max-age=' + maxAge + ';path=/;SameSite=Lax';
@@ -775,7 +946,7 @@
     spreadsheetId: '',
     sheetUrl: '',
     email: '',
-    studies: ['STD;SMA'],
+    studies: ['STD;SMA', 'STD;Supertrend'],
   };
   let alerts = []; // {id, sheet, nazwa, ticker, key, short, label, cena, detectedAt, updatedAt}
 
@@ -812,6 +983,7 @@
   let searchTerm = '';
   let bellPopupOpen = false;
   let settingsPopupOpen = false;
+  let newsPopupOpen = false;
 
 /* ============================== POMOCNICZE ================================= */
   function normalizeHeader(h){
@@ -823,6 +995,31 @@
   function escapeHtml(s){
     return (s || '').toString()
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // Sprawdza, czy komórka ma "prawdziwą" wartość - puste pole lub #N/A traktujemy
+  // jako brak danych (cały wiersz statystyki zostaje wtedy pominięty, bez wstawiania "—").
+  function hasValue(v){
+    if(v === undefined || v === null) return false;
+    const t = String(v).trim();
+    if(t === '') return false;
+    if(t.toUpperCase() === '#N/A') return false;
+    return true;
+  }
+
+  // Eskejpuje CAŁY tekst (ochrona przed wstrzyknięciem HTML/JS), a następnie selektywnie
+  // przywraca wyłącznie proste, dozwolone znaczniki formatujące (żeby dało się formatować
+  // opis w arkuszu Excel/Sheets, np. pogrubienia czy łamanie linii).
+  function sanitizeDescHtml(raw){
+    if(!raw) return '';
+    let s = escapeHtml(raw);
+    // <br>, <br/>, <br />, </br> -> łamanie linii
+    s = s.replace(/&lt;br\s*\/?&gt;/gi, '<br>').replace(/&lt;\/br&gt;/gi, '<br>');
+    ['b','strong','i','em','u','small','sub','sup'].forEach(tag => {
+      s = s.replace(new RegExp('&lt;' + tag + '&gt;', 'gi'), '<' + tag + '>');
+      s = s.replace(new RegExp('&lt;/' + tag + '&gt;', 'gi'), '</' + tag + '>');
+    });
+    return s;
   }
 
   function parseNum(v){
@@ -918,8 +1115,9 @@
         interwal: cell(row, idx.interwal),
         zmiana: cell(row, idx.zmiana),
         sma50: sma50, sma100: sma100, sma200: sma200,
-        // SMA_R to jeden ciąg znaków złożony z wartości kolumn SMA50, SMA100, SMA200 (w tej kolejności)
-        smaR: [sma50, sma100, sma200].join(''),
+        // SMA_R to jeden ciąg znaków złożony z wartości kolumn SMA50, SMA100, SMA200 (w tej kolejności);
+        // składowe puste/#N/A są pomijane, żeby nie zaśmiecały wyniku
+        smaR: [sma50, sma100, sma200].filter(hasValue).join(''),
       });
     });
     return records;
@@ -1040,29 +1238,39 @@
   }
 
 /* ============================== SKANOWANIE ALERTÓW ========================= */
-  function scanRecordsForAlerts(sheetName, records){
+  function recordAlertsForItem(sheetName, item){
     const now = new Date().toISOString();
-    records.forEach(item => {
-      evaluateConditions(item).forEach(c => {
-        const id = sheetName + '::' + (item.ticker || item.nazwa) + '::' + c.key;
-        const existingIdx = alerts.findIndex(a => a.id === id);
-        const entry = {
-          id, sheet: sheetName, nazwa: item.nazwa, ticker: item.ticker,
-          key: c.key, short: c.short, label: c.label,
-          cena: item.cena,
-          detectedAt: existingIdx > -1 ? alerts[existingIdx].detectedAt : now,
-          updatedAt: now,
-        };
-        if(existingIdx > -1) alerts[existingIdx] = entry;
-        else alerts.push(entry);
-      });
+    evaluateConditions(item).forEach(c => {
+      const id = sheetName + '::' + (item.ticker || item.nazwa) + '::' + c.key;
+      const existingIdx = alerts.findIndex(a => a.id === id);
+      const entry = {
+        id, sheet: sheetName, nazwa: item.nazwa, ticker: item.ticker,
+        key: c.key, short: c.short, label: c.label,
+        cena: item.cena,
+        detectedAt: existingIdx > -1 ? alerts[existingIdx].detectedAt : now,
+        updatedAt: now,
+      };
+      if(existingIdx > -1) alerts[existingIdx] = entry;
+      else alerts.push(entry);
     });
+  }
+
+  function scanRecordsForAlerts(sheetName, records){
+    records.forEach(item => recordAlertsForItem(sheetName, item));
   }
 
   async function scanAllSheets(force = false){
     for(const name of configSheetNames){
       try{
         const records = await loadSheet(name, { force });
+        // Cena nie pochodzi już z arkusza - pobieramy ją "na żywo" z widgetu TradingView
+        // dla każdego instrumentu (montowanego niewidocznie poza ekranem), zanim ocenimy
+        // warunki BOS/ChoCh/Entry/TP.
+        await Promise.all(records.map(async item => {
+          if(!item.ticker) return;
+          const live = await fetchLivePriceForTicker(item.ticker);
+          if(!isNaN(live)) item.cena = String(live);
+        }));
         scanRecordsForAlerts(name, records);
       } catch(e){ /* pojedynczy błąd arkusza nie przerywa skanowania reszty */ }
     }
@@ -1279,32 +1487,37 @@
     grid.className = 'grid' + (gridCols === 3 ? ' cols-3' : gridCols === 2 ? ' cols-2' : '');
     grid.innerHTML = records.map((item, i) => {
       const h = computeHighlights(item);
-      const val = (v, key) => `<span class="v${h[key] ? ' badge' : ''}">${escapeHtml(v || '—')}</span>`;
+      const valSpan = (v, key) => `<span class="v${key && h[key] ? ' badge' : ''}"${key ? ` data-key="${key}"` : ''}>${escapeHtml(v)}</span>`;
       const chartId = `tv-${activeSheet}-${i}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const change = formatChange(item.zmiana);
-      const nameHtml = escapeHtml(item.nazwa);
+      const tickerId = `tvt-${activeSheet}-${i}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      // Wiersze statystyk: komórki puste lub "#N/A" są całkowicie pomijane (bez wstawiania "—")
+      const statRows = [];
+      if(hasValue(item.trend)) statRows.push(`<div class="stat"><span class="k">Trend:</span> ${valSpan(item.trend)}</div>`);
+      if(hasValue(item.smaR)) statRows.push(`<div class="stat"><span class="k">SMA_R:</span> <span class="v">${renderSmaR(item.smaR)}</span></div>`);
+      if(hasValue(item.bos)) statRows.push(`<div class="stat"><span class="k">BOS:</span> ${valSpan(item.bos, 'bos')}</div>`);
+      if(hasValue(item.choch)) statRows.push(`<div class="stat"><span class="k">CHoCH:</span> ${valSpan(item.choch, 'choch')}</div>`);
+      if(hasValue(item.entry)) statRows.push(`<div class="stat"><span class="k">Entry:</span> ${valSpan(item.entry, 'entry')}</div>`);
+      if(hasValue(item.tp)) statRows.push(`<div class="stat"><span class="k">TP:</span> ${valSpan(item.tp, 'tp')}</div>`);
+      const hasStats = statRows.length > 0;
+      const hasDesc = !!item.opis;
+
       return `
         <article class="card">
+          <div class="ticker-box" id="${tickerId}" data-symbol="${escapeHtml(item.ticker)}">
+            ${item.ticker ? `<tv-single-ticker symbol="${escapeHtml(item.ticker)}" theme="dark"></tv-single-ticker>` : ''}
+          </div>
           <div class="chart-box" data-symbol="${escapeHtml(item.ticker)}" data-interval="${escapeHtml(item.interwal)}" id="${chartId}">
             <div class="chart-placeholder">${item.ticker ? 'Wczytywanie wykresu…' : 'Brak tickera TradingView'}</div>
           </div>
-          <div class="card-header">
-            <h3 class="card-name">${nameHtml}</h3>
-            ${change ? `<span class="card-change ${change.cls}">${change.text}</span>` : ''}
+          <div class="card-body">
+            ${hasStats ? `<div class="stats${hasDesc ? ' with-separator' : ''}">${statRows.join('')}</div>` : ''}
+            ${hasDesc ? `
+            <div class="card-desc-wrap">
+              <p class="card-desc">${sanitizeDescHtml(item.opis)}</p>
+              <button class="desc-toggle" hidden>czytaj więcej ▾</button>
+            </div>` : ''}
           </div>
-          <div class="stats">
-            <div class="stat"><span class="k">Trend:</span> ${val(item.trend)}</div>
-            <div class="stat"><span class="k">SMA_R:</span> <span class="v">${renderSmaR(item.smaR)}</span></div>
-            <div class="stat"><span class="k">BOS:</span> ${val(item.bos, 'bos')}</div>
-            <div class="stat"><span class="k">CHoCH:</span> ${val(item.choch, 'choch')}</div>
-            <div class="stat"><span class="k">Entry:</span> ${val(item.entry, 'entry')}</div>
-            <div class="stat"><span class="k">TP:</span> ${val(item.tp, 'tp')}</div>
-          </div>
-          ${item.opis ? `
-          <div class="card-desc-wrap">
-            <p class="card-desc">${escapeHtml(item.opis)}</p>
-            <button class="desc-toggle" hidden>czytaj więcej ▾</button>
-          </div>` : ''}
         </article>`;
     }).join('');
     content.innerHTML = '';
@@ -1312,6 +1525,13 @@
 
     grid.querySelectorAll('.chart-box').forEach(box => {
       if(box.dataset.symbol) chartObserver.observe(box);
+    });
+
+    // Widgety tickera ładujemy od razu (nie czekają na przewinięcie) - muszą dostarczyć
+    // żywą cenę potrzebną do wyliczenia podświetleń BOS/CHoCH/Entry/TP.
+    grid.querySelectorAll('.ticker-box[data-symbol]').forEach((box, i) => {
+      initTickerPriceWatch(box, records[i]);
+      pollHideBranding(box);
     });
 
     setupDescToggles(grid);
@@ -1474,8 +1694,10 @@
   function closeAllPopups(){
     document.getElementById('bellPopup').classList.remove('open');
     document.getElementById('settingsPopup').classList.remove('open');
+    document.getElementById('newsPopup').classList.remove('open');
     bellPopupOpen = false;
     settingsPopupOpen = false;
+    newsPopupOpen = false;
     setOverlay(false);
   }
   document.getElementById('bellBtn').addEventListener('click', (e) => {
@@ -1492,6 +1714,73 @@
   });
   document.getElementById('bellClearBtn').addEventListener('click', clearAllAlerts);
   document.getElementById('bellMailBtn').addEventListener('click', sendAlertsMail);
+
+/* ---------- News / Kalendarz: popup ---------- */
+  const newsWidgetsLoaded = { news: false, calendar: false };
+  function ensureNewsWidgetLoaded(tab){
+    if(newsWidgetsLoaded[tab]) return;
+    newsWidgetsLoaded[tab] = true;
+    const container = document.getElementById(tab === 'news' ? 'newsWidgetContainer' : 'calendarWidgetContainer');
+    const script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.async = true;
+    if(tab === 'news'){
+      script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-timeline.js';
+      script.text = JSON.stringify({
+        displayMode: 'compact',
+        feedMode: 'all_symbols',
+        colorTheme: 'dark',
+        isTransparent: false,
+        locale: 'pl',
+        width: '100%',
+        height: '100%'
+      });
+    } else {
+      script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-events.js';
+      script.text = JSON.stringify({
+        colorTheme: 'dark',
+        isTransparent: false,
+        locale: 'pl',
+        countryFilter: 'ar,au,br,ca,cn,fr,de,in,id,it,jp,kr,mx,ru,sa,za,tr,gb,us,eu',
+        importanceFilter: '-1,0,1',
+        width: '100%',
+        height: '100%'
+      });
+    }
+    container.appendChild(script);
+  }
+  function positionNewsPopup(){
+    // Na smartfonie popup jest wyśrodkowany na stałe przez media query - nie ustawiamy "top" z JS.
+    if(window.innerWidth <= 600) return;
+    const popup = document.getElementById('newsPopup');
+    const header = document.querySelector('.header');
+    const rect = header.getBoundingClientRect();
+    popup.style.top = Math.round(rect.bottom + 10) + 'px';
+  }
+  document.getElementById('newsBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const popup = document.getElementById('newsPopup');
+    const willOpen = !popup.classList.contains('open');
+    closeAllPopups();
+    if(willOpen){
+      positionNewsPopup();
+      popup.classList.add('open');
+      newsPopupOpen = true;
+      setOverlay(true);
+      const activeTab = document.querySelector('.news-tab.active');
+      ensureNewsWidgetLoaded(activeTab ? activeTab.dataset.newstab : 'news');
+    }
+  });
+  document.querySelectorAll('.news-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.news-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const target = tab.dataset.newstab;
+      document.querySelectorAll('.news-panel').forEach(p => { p.hidden = p.dataset.newspanel !== target; });
+      ensureNewsWidgetLoaded(target);
+    });
+  });
+  window.addEventListener('resize', () => { if(newsPopupOpen) positionNewsPopup(); });
 
 /* ---------- Ustawienia: popup i zakładki ---------- */
   document.getElementById('settingsBtn').addEventListener('click', (e) => {
@@ -1575,7 +1864,8 @@
   document.addEventListener('click', (e) => {
     if(!e.target.closest('.bell-wrap')) { document.getElementById('bellPopup').classList.remove('open'); bellPopupOpen = false; }
     if(!e.target.closest('.settings-wrap')) { document.getElementById('settingsPopup').classList.remove('open'); settingsPopupOpen = false; }
-    if(!bellPopupOpen && !settingsPopupOpen) setOverlay(false);
+    if(!e.target.closest('.news-wrap')) { document.getElementById('newsPopup').classList.remove('open'); newsPopupOpen = false; }
+    if(!bellPopupOpen && !settingsPopupOpen && !newsPopupOpen) setOverlay(false);
   });
   document.addEventListener('keydown', (e) => { if(e.key === 'Escape') closeAllPopups(); });
 
